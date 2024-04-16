@@ -80,7 +80,6 @@ CACHE_OPENAI = os.environ.get("CACHE_OPENAI", "False").strip().lower() == "true"
 CACHE_GENERAL = os.environ.get("CACHE_GENERAL", "False").strip().lower() == "true"
 CACHE_SAP = os.environ.get("CACHE_SAP", "False").strip().lower() == "true"
 
-
 openai_additional_start_info["LOG_OPENAI"] = LOG_OPENAI
 general_additional_start_info["LOG_GENERAL"] = LOG_GENERAL
 sap_additional_start_info["LOG_SAP"] = LOG_SAP
@@ -127,6 +126,11 @@ IP_BLACKLIST = env2list("IP_BLACKLIST", sep=ENV_VAR_SEP)
 
 OPENAI_API_KEY = env2dict("OPENAI_API_KEY")
 FWD_KEY = env2dict("FORWARD_KEY")
+
+UAA_CLIENT_ID = os.environ.get("UAA_CLIENT_ID", "")
+UAA_CLIENT_SECRET = os.environ.get("UAA_CLIENT_SECRET", "")
+UAA_URL = os.environ.get("UAA_URL", "")
+
 LEVEL_MODELS = {int(key): value for key, value in env2dict("LEVEL_MODELS").items()}
 
 PROXY = os.environ.get("PROXY", "").strip() or None

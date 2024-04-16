@@ -17,6 +17,10 @@ import requests
 import jwt
 import time
 
+import os
+
+print(os.getcwd())
+
 from ..cache import (
     cache_generic_response,
     cache_response,
@@ -75,15 +79,9 @@ class GenericForward:
                 # There was an error in decoding the token; possibly corrupted, fetch a new one
                 pass
 
-        with open("service-key.json", "r") as key_file:
-            svc_key = json.load(key_file)
-        client_id = svc_key["uaa"]["clientid"]
-        client_secret = svc_key["uaa"]["clientsecret"]
-        uaa_url = svc_key["uaa"]["url"]
-
         params = {"grant_type": "client_credentials"}
-        resp = requests.post(f"{uaa_url}/oauth/token",
-                             auth=(client_id, client_secret),
+        resp = requests.post(f"{UAA_URL}/oauth/token",
+                             auth=(UAA_CLIENT_ID, UAA_CLIENT_SECRET),
                              params=params)
         self.TOKEN = resp.json()["access_token"]
 
