@@ -10,22 +10,23 @@ from .helper import env2dict, env2list, format_route_prefix, get_client_ip
 
 openai_additional_start_info = {}
 general_additional_start_info = {}
+sap_additional_start_info = {}
 
 TIMEOUT = float(os.environ.get("TIMEOUT", "").strip() or "10")
 
 ITER_CHUNK_TYPE = (
-    os.environ.get("ITER_CHUNK_TYPE", "").strip() or "efficiency"
+        os.environ.get("ITER_CHUNK_TYPE", "").strip() or "efficiency"
 )  # Options: efficiency, one-by-one
 
 CHAT_COMPLETION_ROUTE = "/v1/chat/completions"
 COMPLETION_ROUTE = "/v1/completions"
 EMBEDDING_ROUTE = "/v1/embeddings"
 
-
 CACHE_ROUTE_SET = set(env2dict("CACHE_ROUTES", []))
 
 openai_additional_start_info['cache_routes'] = CACHE_ROUTE_SET
 general_additional_start_info['cache_routes'] = CACHE_ROUTE_SET
+sap_additional_start_info['cache_routes'] = CACHE_ROUTE_SET
 
 FORWARD_CONFIG = env2dict(
     "FORWARD_CONFIG",
@@ -52,6 +53,15 @@ GENERAL_ROUTE_PREFIX = [
     if i and i.get('type') == 'general'
 ]
 
+SAP_BASE_URL = [
+    i['base_url'] for i in FORWARD_CONFIG if i and i.get('type') == 'sap'
+]
+SAP_ROUTE_PREFIX = [
+    format_route_prefix(i['route'])
+    for i in FORWARD_CONFIG
+    if i and i.get('type') == 'sap'
+]
+
 for openai_route, general_route in zip(OPENAI_ROUTE_PREFIX, GENERAL_ROUTE_PREFIX):
     assert openai_route not in GENERAL_ROUTE_PREFIX
     assert general_route not in OPENAI_ROUTE_PREFIX
@@ -64,24 +74,25 @@ PRINT_CHAT = os.environ.get("PRINT_CHAT", "False").strip().lower() == "true"
 
 LOG_OPENAI = os.environ.get("LOG_OPENAI", "False").strip().lower() == "true"
 LOG_GENERAL = os.environ.get("LOG_GENERAL", "False").strip().lower() == "true"
+LOG_SAP = os.environ.get("LOG_SAP", "False").strip().lower() == "true"
 
 CACHE_OPENAI = os.environ.get("CACHE_OPENAI", "False").strip().lower() == "true"
 CACHE_GENERAL = os.environ.get("CACHE_GENERAL", "False").strip().lower() == "true"
+CACHE_SAP = os.environ.get("CACHE_SAP", "False").strip().lower() == "true"
+
 
 openai_additional_start_info["LOG_OPENAI"] = LOG_OPENAI
 general_additional_start_info["LOG_GENERAL"] = LOG_GENERAL
-
+sap_additional_start_info["LOG_SAP"] = LOG_SAP
 
 if LOG_OPENAI:
     setting_log(openai_route_prefix=OPENAI_ROUTE_PREFIX, print_chat=PRINT_CHAT)
 
-
 if PRINT_CHAT:
     openai_additional_start_info["print_chat"] = True
 
-
 LOG_CACHE_DB_INFO = (
-    os.environ.get("LOG_CACHE_DB_INFO", "false").strip().lower() == "true"
+        os.environ.get("LOG_CACHE_DB_INFO", "false").strip().lower() == "true"
 )
 CACHE_BACKEND = os.environ.get("CACHE_BACKEND", "MEMORY").strip()
 CACHE_ROOT_PATH_OR_URL = os.environ.get("CACHE_ROOT_PATH_OR_URL", ".").strip()
@@ -92,20 +103,20 @@ if CACHE_OPENAI:
     if not CACHE_BACKEND.lower() == 'memory':
         openai_additional_start_info["cache_root_path_or_url"] = CACHE_ROOT_PATH_OR_URL
     DEFAULT_REQUEST_CACHING_VALUE = (
-        os.environ.get("DEFAULT_REQUEST_CACHING_VALUE", "false").strip().lower()
-        == "true"
+            os.environ.get("DEFAULT_REQUEST_CACHING_VALUE", "false").strip().lower()
+            == "true"
     )
     openai_additional_start_info[
         "default_request_caching_value"
     ] = DEFAULT_REQUEST_CACHING_VALUE
 
-if CACHE_GENERAL:
+if CACHE_GENERAL or CACHE_SAP:
     general_additional_start_info["cache_backend"] = CACHE_BACKEND
     if not CACHE_BACKEND.lower() == 'memory':
         general_additional_start_info["cache_root_path_or_url"] = CACHE_ROOT_PATH_OR_URL
     DEFAULT_REQUEST_CACHING_VALUE = (
-        os.environ.get("DEFAULT_REQUEST_CACHING_VALUE", "false").strip().lower()
-        == "true"
+            os.environ.get("DEFAULT_REQUEST_CACHING_VALUE", "false").strip().lower()
+            == "true"
     )
     general_additional_start_info[
         "default_request_caching_value"
@@ -126,7 +137,7 @@ if PROXY:
 GLOBAL_RATE_LIMIT = os.environ.get("GLOBAL_RATE_LIMIT", "").strip() or "inf"
 RATE_LIMIT_BACKEND = os.environ.get("REQ_RATE_LIMIT_BACKEND", "").strip() or None
 RATE_LIMIT_STRATEGY = (
-    os.environ.get("RATE_LIMIT_STRATEGY", "fixed-window").strip() or "fixed-window"
+        os.environ.get("RATE_LIMIT_STRATEGY", "fixed-window").strip() or "fixed-window"
 )
 req_rate_limit_dict = env2dict('REQ_RATE_LIMIT')
 
@@ -148,8 +159,8 @@ def cvt_token_rate_to_interval(token_rate_limit: str):
     if token_rate_limit:
         rate_limit_item = limits.parse(token_rate_limit)
         token_interval = (
-            rate_limit_item.multiples * rate_limit_item.GRANULARITY.seconds
-        ) / rate_limit_item.amount
+                                 rate_limit_item.multiples * rate_limit_item.GRANULARITY.seconds
+                         ) / rate_limit_item.amount
     else:
         token_interval = 0
     return token_interval
@@ -176,6 +187,15 @@ def show_startup():
             **openai_additional_start_info,
         )
     for base_url, route_prefix in zip(GENERAL_BASE_URL, GENERAL_ROUTE_PREFIX):
+        print_startup_info(
+            base_url,
+            route_prefix,
+            "",
+            "",
+            style=next(styles),
+            **general_additional_start_info,
+        )
+    for base_url, route_prefix in zip(SAP_BASE_URL, SAP_ROUTE_PREFIX):
         print_startup_info(
             base_url,
             route_prefix,

@@ -5,9 +5,11 @@ from ..settings import (
     GENERAL_ROUTE_PREFIX,
     OPENAI_BASE_URL,
     OPENAI_ROUTE_PREFIX,
+    SAP_BASE_URL,
+    SAP_ROUTE_PREFIX,
     PROXY,
 )
-from .core import GenericForward, OpenaiForward
+from .core import GenericForward, OpenaiForward, SapForward
 
 
 class ForwardManager:
@@ -21,7 +23,10 @@ class ForwardManager:
         self.generic_objs, self.generic_root_obj = self._create_forward_obj(
             GENERAL_BASE_URL, GENERAL_ROUTE_PREFIX, GenericForward
         )
-        self.root_objs = [i for i in [self.openai_root_obj, self.generic_root_obj] if i]
+        self.sap_objs, self.sap_root_obj = self._create_forward_obj(
+            SAP_BASE_URL, SAP_ROUTE_PREFIX, SapForward
+        )
+        self.root_objs = [i for i in [self.openai_root_obj, self.generic_root_obj, self.sap_root_obj] if i]
         if len(self.root_objs) == 2:
             raise ValueError("Only one root routing forwarding object can exist!")
 
@@ -49,6 +54,7 @@ class ForwardManager:
         """
         [await obj.build_client() for obj in self.openai_objs]
         [await obj.build_client() for obj in self.generic_objs]
+        [await obj.build_client() for obj in self.sap_objs]
         [await obj.build_client() for obj in self.root_objs]
 
     async def shutdown(self):
@@ -57,4 +63,5 @@ class ForwardManager:
         """
         [await obj.client.close() for obj in self.openai_objs]
         [await obj.client.close() for obj in self.generic_objs]
+        [await obj.client.close() for obj in self.sap_objs]
         [await obj.client.close() for obj in self.root_objs]

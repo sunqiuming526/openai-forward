@@ -12,6 +12,10 @@ from aiohttp import TCPConnector
 from fastapi import HTTPException, Request, status
 from loguru import logger
 from starlette.responses import BackgroundTask, StreamingResponse
+import json
+import requests
+import jwt
+import time
 
 from ..cache import (
     cache_generic_response,
@@ -28,6 +32,7 @@ from ..content.openai import (
 from ..decorators import async_retry, async_token_rate_limit
 from ..helper import InfiniteSet
 from ..settings import *
+
 
 # from beartype import beartype
 
@@ -52,6 +57,35 @@ class GenericForward:
         self.PROXY = proxy
         self.ROUTE_PREFIX = route_prefix
         self.client: aiohttp.ClientSession | None = None
+        self.TOKEN = None
+
+    def fetch_jwt_token(self):
+        """
+        Retrieve a JWT token using client credentials from a service key JSON file.
+        The token is requested only if it is expired.
+        """
+        if self.TOKEN is not None:
+            try:
+                # Decode token without verification just to check the expiration
+                decoded_token = jwt.decode(self.TOKEN, options={"verify_signature": False})
+                # Check if the token is still valid
+                if time.time() < decoded_token["exp"]:
+                    return
+            except jwt.DecodeError:
+                # There was an error in decoding the token; possibly corrupted, fetch a new one
+                pass
+
+        with open("service-key.json", "r") as key_file:
+            svc_key = json.load(key_file)
+        client_id = svc_key["uaa"]["clientid"]
+        client_secret = svc_key["uaa"]["clientsecret"]
+        uaa_url = svc_key["uaa"]["url"]
+
+        params = {"grant_type": "client_credentials"}
+        resp = requests.post(f"{uaa_url}/oauth/token",
+                             auth=(client_id, client_secret),
+                             params=params)
+        self.TOKEN = resp.json()["access_token"]
 
     async def build_client(self):
         """
@@ -72,10 +106,10 @@ class GenericForward:
             HTTPException: If the IP is not in the whitelist or if it is in the blacklist.
         """
         if (
-            IP_WHITELIST
-            and ip not in IP_WHITELIST
-            or IP_BLACKLIST
-            and ip in IP_BLACKLIST
+                IP_WHITELIST
+                and ip not in IP_WHITELIST
+                or IP_BLACKLIST
+                and ip in IP_BLACKLIST
         ):
             logger.warning(f"IP {ip} is unauthorized")
             raise HTTPException(
@@ -86,10 +120,10 @@ class GenericForward:
     @staticmethod
     @async_token_rate_limit(token_interval_conf)
     async def aiter_bytes(
-        r: aiohttp.ClientResponse,
-        request: Request,
-        route_path: str,
-        cache_key: str | None = None,
+            r: aiohttp.ClientResponse,
+            request: Request,
+            route_path: str,
+            cache_key: str | None = None,
     ) -> AsyncGenerator[bytes, Any]:
         """
         Asynchronously iterates through the bytes in the given aiohttp.ClientResponse object
@@ -124,12 +158,12 @@ class GenericForward:
         delay=0.2,
         backoff=2,
         exceptions=(
-            aiohttp.ServerTimeoutError,
-            aiohttp.ServerConnectionError,
-            aiohttp.ServerDisconnectedError,
-            asyncio.TimeoutError,
-            anyio.EndOfStream,
-            RuntimeError,
+                aiohttp.ServerTimeoutError,
+                aiohttp.ServerConnectionError,
+                aiohttp.ServerDisconnectedError,
+                asyncio.TimeoutError,
+                anyio.EndOfStream,
+                RuntimeError,
         ),
         # raise_callback_name="build_client",
         raise_handler_name="handle_exception",
@@ -165,13 +199,13 @@ class GenericForward:
             HTTPException: An HTTPException with the appropriate status code and detail.
         """
         if isinstance(
-            e,
-            (
-                asyncio.TimeoutError,
-                aiohttp.ServerConnectionError,
-                aiohttp.ServerDisconnectedError,
-                aiohttp.ServerTimeoutError,
-            ),
+                e,
+                (
+                        asyncio.TimeoutError,
+                        aiohttp.ServerConnectionError,
+                        aiohttp.ServerDisconnectedError,
+                        aiohttp.ServerTimeoutError,
+                ),
         ):
             error_info = (
                 f"{type(e)}: {e} | "
@@ -208,7 +242,7 @@ class GenericForward:
 
         _url_path = f"{request.scope.get('root_path')}{request.scope.get('path')}"
         route_path = (
-            _url_path[len(self.ROUTE_PREFIX) :]
+            _url_path[len(self.ROUTE_PREFIX):]
             if self.ROUTE_PREFIX != '/'
             else _url_path
         )
@@ -217,8 +251,10 @@ class GenericForward:
         else:
             url = f"{self.BASE_URL}{route_path}"
 
-        auth = request.headers.get("Authorization", "")
+        forward_key = request.headers.get("Authorization", "")
 
+        self.fetch_jwt_token()
+        auth = f"Bearer {self.TOKEN}"
         if return_origin_header:
             headers = dict(request.headers)
             headers_to_remove = [
@@ -242,14 +278,23 @@ class GenericForward:
             for key, value in request.headers.items():
                 if key.startswith("openai"):
                     headers[key] = value
-
+        headers["Authorization"] = f"Bearer {self.TOKEN}"
         return {
             'auth': auth,
             'headers': headers,
             "method": request.method,
             'url': url,
             'route_path': route_path,
+            'fk': forward_key
         }
+
+    def add_deployment_id_to_payload(self, payload):
+        payload_str = payload.decode('utf-8')
+        payload_dict = json.loads(payload_str)
+        payload_dict['deployment_id'] = payload_dict.get('model', 'gpt-35-turbo')
+        updated_json_str = json.dumps(payload_dict, indent=4)
+        updated_payload = updated_json_str.encode('utf-8')
+        return updated_payload
 
     async def reverse_proxy(self, request: Request):
         """
@@ -263,12 +308,73 @@ class GenericForward:
         """
         assert self.client
         data = await request.body()
+        data = self.add_deployment_id_to_payload(data)
 
         if LOG_GENERAL:
             logger.debug(f"payload: {data}")
         client_config = self.prepare_client(request, return_origin_header=True)
 
         route_path = client_config["route_path"]
+
+        client_config["headers"]["content-length"] = str(len(data))
+
+        cached_response, cache_key = get_cached_generic_response(
+            data, request, route_path
+        )
+
+        if cached_response:
+            return cached_response
+
+        r = await self.send(client_config, data=data)
+
+        return StreamingResponse(
+            self.aiter_bytes(r, request, cache_key),
+            status_code=r.status,
+            media_type=r.headers.get("content-type"),
+            background=BackgroundTask(r.release),
+        )
+
+
+class SapForward(GenericForward):
+    def handle_authorization(self, client_config):
+        """
+        Handle the authorization for the client.
+
+        Args:
+            client_config (dict): The configuration for the client.
+        """
+        auth, auth_prefix = client_config.get("fk", ""), "Bearer "
+
+        try:
+            fk = auth[len(auth_prefix):]
+            if fk not in FWD_KEY:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Wrong Forward Key!")
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Wrong Forward Key!")
+
+    async def reverse_proxy(self, request: Request):
+        """
+        Asynchronously handle reverse proxying the incoming request.
+
+        Args:
+            request (Request): The incoming FastAPI request object.
+
+        Returns:
+            StreamingResponse: A FastAPI StreamingResponse containing the server's response.
+        """
+        assert self.client
+        data = await request.body()
+        data = self.add_deployment_id_to_payload(data)
+
+        if LOG_GENERAL:
+            logger.debug(f"payload: {data}")
+        client_config = self.prepare_client(request, return_origin_header=True)
+
+        self.handle_authorization(client_config)
+
+        route_path = client_config["route_path"]
+
+        client_config["headers"]["content-length"] = str(len(data))
 
         cached_response, cache_key = get_cached_generic_response(
             data, request, route_path
@@ -343,7 +449,7 @@ class OpenaiForward(GenericForward):
         return None, level
 
     def _handle_result(
-        self, buffer: bytearray, uid: str, route_path: str, request_method: str
+            self, buffer: bytearray, uid: str, route_path: str, request_method: str
     ):
         """
         Logs the result of the API call.
@@ -432,9 +538,9 @@ class OpenaiForward(GenericForward):
                     logger_instance.logger.debug(payload_log_info)
 
                 if (
-                    payload_log_info
-                    and PRINT_CHAT
-                    and logger_instance == self.chat_logger
+                        payload_log_info
+                        and PRINT_CHAT
+                        and logger_instance == self.chat_logger
                 ):
                     self.chat_logger.print_chat_info(payload_log_info)
             else:
@@ -489,13 +595,13 @@ class OpenaiForward(GenericForward):
 
     @async_token_rate_limit(token_interval_conf)
     async def aiter_bytes(
-        self,
-        r: aiohttp.ClientResponse,
-        request: Request,
-        route_path: str,
-        uid: str,
-        cache_key: str | None = None,
-        stream: bool | None = None,
+            self,
+            r: aiohttp.ClientResponse,
+            request: Request,
+            route_path: str,
+            uid: str,
+            cache_key: str | None = None,
+            stream: bool | None = None,
     ):
         """
         Asynchronously iterates through the bytes in the given aiohttp.ClientResponse object
@@ -583,7 +689,7 @@ class OpenaiForward(GenericForward):
         model_set = self._zero_level_model_set
 
         if auth:
-            fk = auth[len(auth_prefix) :]
+            fk = auth[len(auth_prefix):]
             if fk in FWD_KEY:
                 sk, level = self.fk_to_sk(fk)
                 assert level is not None

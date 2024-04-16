@@ -81,6 +81,7 @@ add_route = lambda obj: app.add_route(
 )
 [add_route(obj) for obj in forward_manager.openai_objs]
 [add_route(obj) for obj in forward_manager.generic_objs]
+[add_route(obj) for obj in forward_manager.sap_objs]
 [add_route(obj) for obj in forward_manager.root_objs]
 
 

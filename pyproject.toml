@@ -36,6 +36,7 @@ dependencies = [
     "tomli",
     "tomli-w",
     "pyzmq",
+    "PyJWT"
 ]
 
 dynamic = ["version"]
